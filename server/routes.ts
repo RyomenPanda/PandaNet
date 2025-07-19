@@ -1,0 +1,455 @@
+import type { Express } from "express";
+import express from "express";
+import { createServer, type Server } from "http";
+import { WebSocketServer, WebSocket } from "ws";
+import multer from "multer";
+import path from "path";
+import { storage } from "./storage";
+import { setupAuth, requireAuth } from "./auth";
+import { insertChatSchema, insertMessageSchema, insertChatMemberSchema } from "@shared/schema";
+import { z } from "zod";
+
+// File upload configuration
+const upload = multer({
+  dest: 'uploads/',
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx|mp4|mov|avi/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Invalid file type'));
+    }
+  },
+});
+
+interface WebSocketClient extends WebSocket {
+  userId?: number;
+  chatId?: number;
+}
+
+export async function registerRoutes(app: Express): Promise<Server> {
+  // Auth middleware
+  setupAuth(app);
+
+  // User profile routes (auth routes are now in auth.ts)
+
+  app.patch('/api/user/profile', requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const updates = req.body;
+      
+      const user = await storage.updateUser(userId, updates);
+      res.json({
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        displayName: user.displayName,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        profileImageUrl: user.profileImageUrl,
+        statusMessage: user.statusMessage,
+      });
+    } catch (error) {
+      console.error("Error updating profile:", error);
+      res.status(500).json({ message: "Failed to update profile" });
+    }
+  });
+
+  // Chat routes
+  app.get('/api/chats', requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const chats = await storage.getUserChats(userId);
+      
+
+      
+      res.json(chats);
+    } catch (error) {
+      console.error("Error fetching chats:", error);
+      res.status(500).json({ message: "Failed to fetch chats" });
+    }
+  });
+
+  app.post('/api/chats', requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const chatData = insertChatSchema.parse({
+        ...req.body,
+        createdBy: userId,
+      });
+
+      const chat = await storage.createChat(chatData);
+      
+      // Add creator as admin member
+      await storage.addChatMember({
+        chatId: chat.id,
+        userId: userId,
+        isAdmin: true,
+      });
+
+      // Add other members if provided
+      if (req.body.members && Array.isArray(req.body.members)) {
+        for (const memberId of req.body.members) {
+          await storage.addChatMember({
+            chatId: chat.id,
+            userId: memberId,
+            isAdmin: false,
+          });
+        }
+      }
+
+      // Return complete chat data with members
+      const completeChat = await storage.getUserChats(userId);
+      const createdChat = completeChat.find(c => c.id === chat.id);
+      res.json(createdChat || chat);
+    } catch (error) {
+      console.error("Error creating chat:", error);
+      res.status(500).json({ message: "Failed to create chat" });
+    }
+  });
+
+  app.get('/api/chats/:chatId/messages', requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const chatId = parseInt(req.params.chatId);
+      
+      // Check if user is member of the chat
+      const isMember = await storage.isUserInChat(chatId, userId);
+      if (!isMember) {
+        return res.status(403).json({ message: "Not authorized to view this chat" });
+      }
+
+      const messages = await storage.getChatMessages(chatId);
+      res.json(messages.reverse()); // Return in chronological order
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      res.status(500).json({ message: "Failed to fetch messages" });
+    }
+  });
+
+  app.post('/api/chats/:chatId/messages', requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const chatId = parseInt(req.params.chatId);
+      
+      // Check if user is member of the chat
+      const isMember = await storage.isUserInChat(chatId, userId);
+      if (!isMember) {
+        return res.status(403).json({ message: "Not authorized to send messages to this chat" });
+      }
+
+      const messageData = insertMessageSchema.parse({
+        ...req.body,
+        chatId,
+        senderId: userId,
+      });
+
+      const message = await storage.createMessage(messageData);
+      
+      // Broadcast message to WebSocket clients
+      const messageWithSender = {
+        ...message,
+        sender: await storage.getUser(userId),
+      };
+      
+      broadcastToChat(chatId, {
+        type: 'new_message',
+        data: messageWithSender,
+      });
+
+      res.json(messageWithSender);
+    } catch (error) {
+      console.error("Error sending message:", error);
+      res.status(500).json({ message: "Failed to send message" });
+    }
+  });
+
+  app.delete('/api/chats/:chatId', requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const chatId = parseInt(req.params.chatId);
+      
+      // Check if user is member of the chat
+      const isMember = await storage.isUserInChat(chatId, userId);
+      if (!isMember) {
+        return res.status(403).json({ message: "Not authorized to delete this chat" });
+      }
+
+      await storage.deleteChat(chatId, userId);
+      
+      // Broadcast chat deletion to WebSocket clients
+      broadcastToChat(chatId, {
+        type: 'chat_deleted',
+        data: { chatId },
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting chat:", error);
+      res.status(500).json({ message: "Failed to delete chat" });
+    }
+  });
+
+  // File upload route
+  app.post('/api/upload', requireAuth, upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      const fileUrl = `/uploads/${req.file.filename}`;
+      res.json({
+        url: fileUrl,
+        name: req.file.originalname,
+        size: req.file.size,
+        type: req.file.mimetype,
+      });
+    } catch (error) {
+      console.error("Error uploading file:", error);
+      res.status(500).json({ message: "Failed to upload file" });
+    }
+  });
+
+  // Serve uploaded files
+  app.use('/uploads', express.static('uploads'));
+
+  /**
+   * Search users by username (partial match, case-insensitive)
+   * GET /api/users/search?username=someuser
+   * Returns: [{ id, username, displayName, firstName, lastName, profileImageUrl }]
+   */
+  app.get('/api/users/search', requireAuth, async (req: any, res) => {
+    try {
+      const { username } = req.query;
+      const userId = req.user.id;
+      if (!username || typeof username !== 'string' || username.trim() === '') {
+        return res.status(400).json({ message: 'Username query required' });
+      }
+      // Search users by username (case-insensitive, partial match), exclude self
+      const users = await storage.searchUsersByUsername(username, userId);
+      res.json(users.map(u => ({
+        id: u.id,
+        username: u.username,
+        displayName: u.displayName,
+        firstName: u.firstName,
+        lastName: u.lastName,
+        profileImageUrl: u.profileImageUrl,
+      })));
+    } catch (error) {
+      console.error('User search error:', error);
+      res.status(500).json({ message: 'Failed to search users' });
+    }
+  });
+
+  const httpServer = createServer(app);
+
+  // WebSocket setup
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  const clients = new Map<string, WebSocketClient[]>();
+
+  function broadcastToChat(chatId: number, message: any) {
+    const chatClients = clients.get(`chat_${chatId}`) || [];
+    chatClients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(message));
+      }
+    });
+  }
+
+  // Track online users
+  const onlineUsers = new Set<number>();
+
+  wss.on('connection', (ws: WebSocketClient, req) => {
+    console.log('WebSocket client connected');
+
+    ws.on('message', async (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        
+        switch (message.type) {
+          case 'join_chat':
+            const { chatId, userId } = message.data;
+            ws.userId = userId;
+            ws.chatId = chatId;
+            
+            // Mark user as online
+            onlineUsers.add(userId);
+            
+            // Add client to chat room
+            const chatKey = `chat_${chatId}`;
+            if (!clients.has(chatKey)) {
+              clients.set(chatKey, []);
+            }
+            clients.get(chatKey)!.push(ws);
+            
+            // Notify others that user joined
+            broadcastToChat(chatId, {
+              type: 'user_joined',
+              data: { userId },
+            });
+            
+            // Broadcast online status to all connected clients
+            wss.clients.forEach((client) => {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({
+                  type: 'user_online',
+                  data: { userId }
+                }));
+              }
+            });
+            break;
+
+          case 'typing':
+            if (ws.chatId) {
+              broadcastToChat(ws.chatId, {
+                type: 'typing',
+                data: { userId: ws.userId, typing: message.data.typing },
+              });
+            }
+            break;
+        }
+      } catch (error) {
+        console.error('WebSocket message error:', error);
+      }
+    });
+
+    ws.on('close', () => {
+      // Remove client from all chat rooms
+      if (ws.chatId) {
+        const chatKey = `chat_${ws.chatId}`;
+        const chatClients = clients.get(chatKey) || [];
+        const index = chatClients.indexOf(ws);
+        if (index > -1) {
+          chatClients.splice(index, 1);
+          if (chatClients.length === 0) {
+            clients.delete(chatKey);
+          }
+        }
+        
+        // Notify others that user left
+        broadcastToChat(ws.chatId, {
+          type: 'user_left',
+          data: { userId: ws.userId },
+        });
+      }
+      
+      // Mark user as offline if no other connections exist
+      if (ws.userId) {
+        const userStillOnline = Array.from(wss.clients).some(client => 
+          (client as WebSocketClient).userId === ws.userId && client.readyState === WebSocket.OPEN
+        );
+        
+        if (!userStillOnline) {
+          onlineUsers.delete(ws.userId);
+          
+          // Broadcast offline status to all connected clients
+          wss.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify({
+                type: 'user_offline',
+                data: { userId: ws.userId }
+              }));
+            }
+          });
+        }
+      }
+    });
+  });
+
+  // Read receipts endpoints - placed after WebSocket setup
+  app.patch("/api/messages/:messageId/status", requireAuth, async (req: any, res) => {
+    try {
+      const { messageId } = req.params;
+      const { status } = req.body;
+      const userId = req.user?.id;
+
+      if (!["delivered", "seen"].includes(status)) {
+        return res.status(400).json({ error: "Invalid status" });
+      }
+
+      const message = await storage.updateMessageStatus(
+        parseInt(messageId),
+        status,
+        userId
+      );
+
+      if (!message) {
+        return res.status(404).json({ error: "Message not found" });
+      }
+
+      // Broadcast status update via WebSocket
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({
+            type: 'message_status_update',
+            data: {
+              messageId: parseInt(messageId),
+              status,
+              userId,
+              timestamp: new Date().toISOString()
+            }
+          }));
+        }
+      });
+
+      res.json(message);
+    } catch (error) {
+      console.error("Error updating message status:", error);
+      res.status(500).json({ error: "Failed to update message status" });
+    }
+  });
+
+  app.post("/api/chats/:chatId/mark-delivered", requireAuth, async (req: any, res) => {
+    try {
+      const { chatId } = req.params;
+      const userId = req.user?.id;
+
+      await storage.markChatMessagesAsDelivered(parseInt(chatId), userId);
+
+      broadcastToChat(parseInt(chatId), {
+        type: 'messages_delivered',
+        data: {
+          chatId: parseInt(chatId),
+          userId,
+          timestamp: new Date().toISOString()
+        }
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking messages as delivered:", error);
+      res.status(500).json({ error: "Failed to mark messages as delivered" });
+    }
+  });
+
+  app.post("/api/chats/:chatId/mark-seen", requireAuth, async (req: any, res) => {
+    try {
+      const { chatId } = req.params;
+      const userId = req.user?.id;
+
+      await storage.markChatMessagesAsSeen(parseInt(chatId), userId);
+
+      broadcastToChat(parseInt(chatId), {
+        type: 'messages_seen',
+        data: {
+          chatId: parseInt(chatId),
+          userId,
+          timestamp: new Date().toISOString()
+        }
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking messages as seen:", error);
+      res.status(500).json({ error: "Failed to mark messages as seen" });
+    }
+  });
+
+  return httpServer;
+}
