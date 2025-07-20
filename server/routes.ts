@@ -462,40 +462,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Polling endpoints for WebSocket fallback
-  app.get('/api/messages/sync', requireAuth, async (req: any, res) => {
-    try {
-      const userId = req.user.id;
-      const { lastMessageId = 0, chatId } = req.query;
-      
-      if (!chatId) {
-        return res.status(400).json({ message: "Chat ID is required" });
-      }
-
-      // Get new messages since last sync
-      const chatMessages = await storage.getChatMessages(parseInt(chatId), 50);
-      const newMessages = chatMessages.filter((msg: any) => 
-        msg.id > parseInt(lastMessageId) && msg.senderId !== userId
-      );
-
-      res.json(newMessages);
-    } catch (error) {
-      console.error("Error syncing messages:", error);
-      res.status(500).json({ message: "Failed to sync messages" });
-    }
-  });
-
-  app.get('/api/users/online', requireAuth, async (req: any, res) => {
-    try {
-      // Return currently online users from WebSocket tracking
-      const onlineUserIds = Array.from(onlineUsers);
-      res.json(onlineUserIds);
-    } catch (error) {
-      console.error("Error fetching online users:", error);
-      res.status(500).json({ message: "Failed to fetch online users" });
-    }
-  });
-
   // Read receipts endpoints
   app.patch("/api/messages/:messageId/status", requireAuth, async (req: any, res) => {
     try {

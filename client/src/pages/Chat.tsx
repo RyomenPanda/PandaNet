@@ -25,8 +25,6 @@ export default function Chat() {
 
   // Update the WebSocket message handler to include typing events and polling fallback
   const { sendMessage: sendWsMessage, isConnected: wsConnected } = useWebSocket({
-    enablePolling: true,
-    pollingInterval: 3000,
     onMessage: (message) => {
       switch (message.type) {
         case 'new_message':
@@ -127,63 +125,6 @@ export default function Chat() {
       });
     }
   }, [selectedChat, user, sendWsMessage]);
-
-  // Additional interval-based sync for messages (fallback)
-  useEffect(() => {
-    if (!selectedChat || wsConnected) return; // Only poll if WebSocket is not connected
-
-    const syncInterval = setInterval(async () => {
-      try {
-        const response = await fetch(`/api/messages/sync?chatId=${selectedChat.id}&lastMessageId=0`, {
-          credentials: 'include'
-        });
-        if (response.ok) {
-          const newMessages = await response.json();
-          if (newMessages.length > 0) {
-            // Update messages in cache
-            queryClient.setQueryData(
-              ["/api/chats", selectedChat.id, "messages"],
-              (oldMessages: any[] = []) => {
-                const updatedMessages = [...oldMessages];
-                newMessages.forEach((newMessage: any) => {
-                  const existingIndex = updatedMessages.findIndex(m => m.id === newMessage.id);
-                  if (existingIndex === -1) {
-                    updatedMessages.unshift(newMessage);
-                  }
-                });
-                return updatedMessages;
-              }
-            );
-          }
-        }
-      } catch (error) {
-        console.error('Message sync error:', error);
-      }
-    }, 3000); // Sync every 3 seconds as fallback
-
-    return () => clearInterval(syncInterval);
-  }, [selectedChat, queryClient, wsConnected]);
-
-  // Interval-based sync for online status (fallback)
-  useEffect(() => {
-    if (wsConnected) return; // Only poll if WebSocket is not connected
-
-    const onlineSyncInterval = setInterval(async () => {
-      try {
-        const response = await fetch('/api/users/online', {
-          credentials: 'include'
-        });
-        if (response.ok) {
-          const onlineUserIds = await response.json();
-          setOnlineUsers(new Set(onlineUserIds));
-        }
-      } catch (error) {
-        console.error('Failed to sync online status:', error);
-      }
-    }, 10000); // Sync every 10 seconds
-
-    return () => clearInterval(onlineSyncInterval);
-  }, [wsConnected]);
 
   if (chatsLoading) {
     return (
