@@ -6,7 +6,7 @@ import ProfileModal from "@/components/ProfileModal";
 import GroupModal from "@/components/GroupModal";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWebSocket } from "@/hooks/useWebSocket";
-import type { Chat, User } from "@shared/schema";
+import type { Chat, User, Message } from "@shared/schema";
 
 interface WebSocketMessage {
   type: string;
@@ -97,11 +97,17 @@ export default function Chat() {
 
         queryClient.setQueryData(
           ["/api/chats", updateChatId, "messages"],
-          (oldMessages: any[] = []) =>
+          (oldMessages: (Message & { sender: User })[] = []) =>
             oldMessages.map(msg => {
               // Only update messages that are not our own and have a lower status
-              if (msg.senderId !== user?.id && (msg.status === 'sent' || (newStatus === 'seen' && msg.status === 'delivered'))) {
-                return { ...msg, status: newStatus };
+              if (msg.senderId !== user?.id) {
+                const currentStatus = msg.status || 'sent';
+                if (newStatus === 'seen' && (currentStatus === 'sent' || currentStatus === 'delivered')) {
+                  return { ...msg, status: 'seen' };
+                }
+                if (newStatus === 'delivered' && currentStatus === 'sent') {
+                  return { ...msg, status: 'delivered' };
+                }
               }
               return msg;
             })

@@ -71,9 +71,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ws.chatId = chatId;
             
             console.log(`User ${userId} joined chat ${chatId}`);
-            
-            // Mark user as online
+
+            const wasOffline = !onlineUsers.has(userId);
             onlineUsers.add(userId);
+            
+            // If user just came online, upgrade their messages to 'delivered'
+            if (wasOffline) {
+              (async () => {
+                try {
+                  const userChats = await storage.getUserChats(userId);
+                  for (const chat of userChats) {
+                    await storage.markChatMessagesAsDelivered(chat.id, userId);
+                    broadcastToChat(chat.id, {
+                      type: 'messages_delivered',
+                      data: {
+                        chatId: chat.id,
+                        userId: userId,
+                      }
+                    });
+                  }
+                } catch(e) {
+                  console.error(`Error upgrading messages to delivered for user ${userId}`, e);
+                }
+              })();
+            }
             
             // Add client to chat room
             const chatKey = `chat_${chatId}`;
@@ -276,10 +297,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Not authorized to send messages to this chat" });
       }
 
+      // Determine initial status based on recipients' online status
+      const chatMembersList = await storage.getChatMembers(chatId);
+      const recipientIds = chatMembersList
+        .map(member => member.userId)
+        .filter(id => id !== null && id !== userId) as number[];
+
+      const isAnyRecipientOnline = recipientIds.some(id => onlineUsers.has(id));
+      const initialStatus = isAnyRecipientOnline ? 'delivered' : 'sent';
+
       const messageData = insertMessageSchema.parse({
         ...req.body,
         chatId,
         senderId: userId,
+        status: initialStatus,
       });
 
       const message = await storage.createMessage(messageData);

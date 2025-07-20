@@ -104,22 +104,7 @@ export default function ChatArea({
         data: { chatId: chatWithMembers.id, userId: user.id },
       });
 
-      // Mark messages as delivered when entering chat (only for messages from other users)
-      const markAsDelivered = async () => {
-        try {
-          await apiRequest("POST", `/api/chats/${chatWithMembers.id}/mark-delivered`);
-        } catch (error) {
-          console.error("Failed to mark messages as delivered:", error);
-        }
-      };
-
-      markAsDelivered();
-    }
-  }, [chatWithMembers, user, sendWsMessage]);
-
-  // Mark messages as seen when messages are visible (only for messages from other users)
-  useEffect(() => {
-    if (chatWithMembers && user && messages.length > 0) {
+      // Mark messages as seen when entering a chat
       const markAsSeen = async () => {
         try {
           await apiRequest("POST", `/api/chats/${chatWithMembers.id}/mark-seen`);
@@ -127,12 +112,27 @@ export default function ChatArea({
           console.error("Failed to mark messages as seen:", error);
         }
       };
-
-      // Add a small delay to simulate "viewing" the messages
-      const timeoutId = setTimeout(markAsSeen, 1000);
-      return () => clearTimeout(timeoutId);
+      markAsSeen();
     }
-  }, [chatWithMembers, user, messages]);
+  }, [chatWithMembers, user, sendWsMessage]);
+
+  // This effect is now redundant because the above effect handles marking messages as seen.
+  // // Mark messages as seen when messages are visible (only for messages from other users)
+  // useEffect(() => {
+  //   if (chatWithMembers && user && messages.length > 0) {
+  //     const markAsSeen = async () => {
+  //       try {
+  //         await apiRequest("POST", `/api/chats/${chatWithMembers.id}/mark-seen`);
+  //       } catch (error) {
+  //         console.error("Failed to mark messages as seen:", error);
+  //       }
+  //     };
+
+  //     // Add a small delay to simulate "viewing" the messages
+  //     const timeoutId = setTimeout(markAsSeen, 1000);
+  //     return () => clearTimeout(timeoutId);
+  //   }
+  // }, [chatWithMembers, user, messages]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
