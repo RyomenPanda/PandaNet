@@ -57,17 +57,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   wss.on('connection', (ws: WebSocketClient, req) => {
-    console.log('WebSocket client connected');
+    console.log('A new WebSocket client connected.');
 
     ws.on('message', async (data) => {
       try {
         const message = JSON.parse(data.toString());
+        console.log('Received WebSocket message:', message);
         
         switch (message.type) {
           case 'join_chat':
             const { chatId, userId } = message.data;
             ws.userId = userId;
             ws.chatId = chatId;
+            
+            console.log(`User ${userId} joined chat ${chatId}`);
             
             // Mark user as online
             onlineUsers.add(userId);
@@ -84,6 +87,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               type: 'user_joined',
               data: { userId },
             });
+            console.log(`Broadcasted 'user_joined' for user ${userId} in chat ${chatId}`);
             
             // Broadcast online status to all connected clients
             wss.clients.forEach((client) => {
@@ -94,6 +98,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 }));
               }
             });
+            console.log(`Broadcasted 'user_online' for user ${userId} to all clients.`);
             break;
 
           case 'typing':
@@ -102,15 +107,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 type: 'typing',
                 data: { userId: ws.userId, typing: message.data.typing },
               });
+              console.log(`Broadcasted 'typing' status for user ${ws.userId} in chat ${ws.chatId}`);
             }
             break;
         }
       } catch (error) {
-        console.error('WebSocket message error:', error);
+        console.error('WebSocket message processing error:', error);
       }
     });
 
     ws.on('close', () => {
+      console.log(`WebSocket client disconnected. UserID: ${ws.userId}, ChatID: ${ws.chatId}`);
       // Remove client from all chat rooms
       if (ws.chatId) {
         const chatKey = `chat_${ws.chatId}`;
@@ -118,8 +125,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const index = chatClients.indexOf(ws);
         if (index > -1) {
           chatClients.splice(index, 1);
+          console.log(`Removed client from chat room: ${chatKey}`);
           if (chatClients.length === 0) {
             clients.delete(chatKey);
+            console.log(`Deleted empty chat room: ${chatKey}`);
           }
         }
         
@@ -128,6 +137,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           type: 'user_left',
           data: { userId: ws.userId },
         });
+        console.log(`Broadcasted 'user_left' for user ${ws.userId} in chat ${ws.chatId}`);
       }
       
       // Mark user as offline if no other connections exist
@@ -138,6 +148,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         if (!userStillOnline) {
           onlineUsers.delete(ws.userId);
+          console.log(`User ${ws.userId} is now offline.`);
           
           // Broadcast offline status to all connected clients
           wss.clients.forEach((client) => {
@@ -148,8 +159,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
               }));
             }
           });
+          console.log(`Broadcasted 'user_offline' for user ${ws.userId} to all clients.`);
         }
       }
+    });
+
+    ws.on('error', (error) => {
+      console.error('WebSocket client error:', error);
     });
   });
 
@@ -294,8 +310,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const messageId = parseInt(req.params.messageId);
       
       // Get the message to check ownership and get media info
-      const messages = await db.select().from(messages).where(eq(messages.id, messageId));
-      const message = messages[0];
+      const messageResult = await db.select().from(messages).where(eq(messages.id, messageId));
+      const message = messageResult[0];
       
       if (!message) {
         return res.status(404).json({ message: "Message not found" });
@@ -308,10 +324,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.deleteMessage(messageId, userId);
       
       // Broadcast message deletion to WebSocket clients
-      broadcastToChat(message.chatId, {
-        type: 'message_deleted',
-        data: { messageId },
-      });
+      if (message.chatId) {
+        broadcastToChat(message.chatId, {
+          type: 'message_deleted',
+          data: { messageId },
+        });
+      }
 
       res.json({ success: true });
     } catch (error) {
@@ -357,7 +375,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // File upload endpoint
-  app.post('/api/upload', requireAuth, upload.single('file'), async (req: any, res) => {
+  app.post('/api/upload', requireAuth, upload.single('file') as any, async (req: any, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
@@ -441,6 +459,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error during cleanup:", error);
       res.status(500).json({ message: "Failed to perform cleanup" });
+    }
+  });
+
+  // Polling endpoints for WebSocket fallback
+  app.get('/api/messages/sync', requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const { lastMessageId = 0, chatId } = req.query;
+      
+      if (!chatId) {
+        return res.status(400).json({ message: "Chat ID is required" });
+      }
+
+      // Get new messages since last sync
+      const chatMessages = await storage.getChatMessages(parseInt(chatId), 50);
+      const newMessages = chatMessages.filter((msg: any) => 
+        msg.id > parseInt(lastMessageId) && msg.senderId !== userId
+      );
+
+      res.json(newMessages);
+    } catch (error) {
+      console.error("Error syncing messages:", error);
+      res.status(500).json({ message: "Failed to sync messages" });
+    }
+  });
+
+  app.get('/api/users/online', requireAuth, async (req: any, res) => {
+    try {
+      // Return currently online users from WebSocket tracking
+      const onlineUserIds = Array.from(onlineUsers);
+      res.json(onlineUserIds);
+    } catch (error) {
+      console.error("Error fetching online users:", error);
+      res.status(500).json({ message: "Failed to fetch online users" });
     }
   });
 

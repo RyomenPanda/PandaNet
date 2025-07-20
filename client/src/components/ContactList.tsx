@@ -49,37 +49,7 @@ export default function ContactList({
   });
 
   // Listen for WebSocket messages to update chat list
-  const { sendMessage: sendWsMessage } = useWebSocket({
-    onMessage: (message) => {
-      if (message.type === 'new_message') {
-        // Update the lastMessage in the chats query cache
-        queryClient.setQueryData(
-          ["/api/chats"],
-          (oldChats: any[] = []) => 
-            oldChats.map(chat => 
-              chat.id === message.data.chatId 
-                ? { ...chat, lastMessage: message.data }
-                : chat
-            )
-        );
-        
-        // If the new message has media, update storage usage
-        if (message.data.mediaUrl) {
-          queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
-        }
-      }
-      
-      // Update storage when messages are deleted
-      if (message.type === 'message_deleted') {
-        queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
-      }
-      
-      // Update storage when chats are deleted
-      if (message.type === 'chat_deleted') {
-        queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
-      }
-    },
-  });
+  // The ContactList should only receive onlineUsers as a prop and use it
 
   // Find userIds already in chats (for 1:1 chats)
   const chatUserIds = new Set(
@@ -207,6 +177,13 @@ export default function ContactList({
     }
   };
 
+  // Add this function to check if a user is online
+  const isUserOnline = (chat: any) => {
+    if (chat.isGroup) return false;
+    const otherUser = chat.members.find((m: any) => m.userId !== user?.id)?.user;
+    return otherUser ? onlineUsers.has(otherUser.id) : false;
+  };
+
   return (
     <div className="w-80 bg-gray-800 border-r border-gray-700 flex flex-col">
       {/* Header */}
@@ -280,6 +257,8 @@ export default function ContactList({
             const avatarUrl = getChatAvatar(chat);
             const displayName = getChatDisplayName(chat);
             const lastMessage = chat.lastMessage;
+            const isOnline = isUserOnline(chat);
+            
             return (
               <div
                 key={chat.id}
@@ -308,6 +287,12 @@ export default function ContactList({
                           {displayName.charAt(0).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
+                    )}
+                    {/* Online status indicator */}
+                    {!chat.isGroup && (
+                      <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-gray-800 ${
+                        isOnline ? 'bg-green-500' : 'bg-gray-500'
+                      }`} />
                     )}
                     {chat.isGroup && (
                       <div className="absolute -top-1 -right-1 w-6 h-6 bg-purple-600 rounded-full flex items-center justify-center">

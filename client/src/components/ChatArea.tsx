@@ -24,19 +24,20 @@ interface ChatAreaProps {
   onChatDeleted?: (chatId: number) => void;
   sendWsMessage: (message: any) => void; // Add this prop
   onlineUsers: Set<number>; // Add this prop
+  typingUsers: Set<number>; // Add this prop
 }
 
 export default function ChatArea({ 
   selectedChat, 
   onChatDeleted,
   sendWsMessage,
-  onlineUsers
+  onlineUsers,
+  typingUsers
 }: ChatAreaProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showProfilePreview, setShowProfilePreview] = useState(false);
   const [messageToDelete, setMessageToDelete] = useState<Message | null>(null);

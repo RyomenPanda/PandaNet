@@ -11,21 +11,22 @@ import type { Chat, User } from "@shared/schema";
 export default function Chat() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [selectedChat, setSelectedChat] = useState<(Chat & { 
-    members: any[];
-    lastMessage?: any;
-  }) | null>(null);
+  const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
+  // Add typing users state
+  const [typingUsers, setTypingUsers] = useState<Set<number>>(new Set());
 
   const { data: chats, isLoading: chatsLoading } = useQuery({
     queryKey: ["/api/chats"],
     enabled: !!user,
   });
 
-  // Global WebSocket connection
-  const { sendMessage: sendWsMessage } = useWebSocket({
+  // Update the WebSocket message handler to include typing events and polling fallback
+  const { sendMessage: sendWsMessage, isConnected: wsConnected } = useWebSocket({
+    enablePolling: true,
+    pollingInterval: 3000,
     onMessage: (message) => {
       switch (message.type) {
         case 'new_message':
@@ -49,6 +50,20 @@ export default function Chat() {
           // If the new message has media, update storage usage
           if (message.data.mediaUrl) {
             queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
+          }
+          break;
+          
+        case 'typing':
+          if (message.data.userId !== user?.id) {
+            setTypingUsers(prev => {
+              const newSet = new Set(prev);
+              if (message.data.typing) {
+                newSet.add(message.data.userId);
+              } else {
+                newSet.delete(message.data.userId);
+              }
+              return newSet;
+            });
           }
           break;
           
@@ -84,7 +99,7 @@ export default function Chat() {
           break;
           
         case 'user_online':
-          setOnlineUsers(prev => new Set([...prev, message.data.userId]));
+          setOnlineUsers(prev => new Set(Array.from(prev).concat(message.data.userId)));
           break;
           
         case 'user_offline':
@@ -93,6 +108,11 @@ export default function Chat() {
             newSet.delete(message.data.userId);
             return newSet;
           });
+          break;
+          
+        case 'online_users_update':
+          // Update online users from polling
+          setOnlineUsers(new Set(message.data.onlineUsers));
           break;
       }
     },
@@ -107,6 +127,63 @@ export default function Chat() {
       });
     }
   }, [selectedChat, user, sendWsMessage]);
+
+  // Additional interval-based sync for messages (fallback)
+  useEffect(() => {
+    if (!selectedChat || wsConnected) return; // Only poll if WebSocket is not connected
+
+    const syncInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/messages/sync?chatId=${selectedChat.id}&lastMessageId=0`, {
+          credentials: 'include'
+        });
+        if (response.ok) {
+          const newMessages = await response.json();
+          if (newMessages.length > 0) {
+            // Update messages in cache
+            queryClient.setQueryData(
+              ["/api/chats", selectedChat.id, "messages"],
+              (oldMessages: any[] = []) => {
+                const updatedMessages = [...oldMessages];
+                newMessages.forEach((newMessage: any) => {
+                  const existingIndex = updatedMessages.findIndex(m => m.id === newMessage.id);
+                  if (existingIndex === -1) {
+                    updatedMessages.unshift(newMessage);
+                  }
+                });
+                return updatedMessages;
+              }
+            );
+          }
+        }
+      } catch (error) {
+        console.error('Message sync error:', error);
+      }
+    }, 3000); // Sync every 3 seconds as fallback
+
+    return () => clearInterval(syncInterval);
+  }, [selectedChat, queryClient, wsConnected]);
+
+  // Interval-based sync for online status (fallback)
+  useEffect(() => {
+    if (wsConnected) return; // Only poll if WebSocket is not connected
+
+    const onlineSyncInterval = setInterval(async () => {
+      try {
+        const response = await fetch('/api/users/online', {
+          credentials: 'include'
+        });
+        if (response.ok) {
+          const onlineUserIds = await response.json();
+          setOnlineUsers(new Set(onlineUserIds));
+        }
+      } catch (error) {
+        console.error('Failed to sync online status:', error);
+      }
+    }, 10000); // Sync every 10 seconds
+
+    return () => clearInterval(onlineSyncInterval);
+  }, [wsConnected]);
 
   if (chatsLoading) {
     return (
@@ -127,21 +204,22 @@ export default function Chat() {
     <div className="flex h-screen bg-black text-white">
       {/* Contact List Sidebar */}
       <ContactList
-        chats={chats || []}
+        chats={(chats as any) || []}
         selectedChat={selectedChat}
-        onSelectChat={setSelectedChat}
+        onSelectChat={(chat) => setSelectedChat(chat as any)}
         onShowProfile={() => setShowProfileModal(true)}
         onlineUsers={onlineUsers}
       />
 
       {/* Main Chat Area */}
       <ChatArea 
-        selectedChat={selectedChat} 
+        selectedChat={selectedChat as any} 
         onChatDeleted={(chatId) => {
           setSelectedChat(null);
         }}
         sendWsMessage={sendWsMessage}
         onlineUsers={onlineUsers}
+        typingUsers={typingUsers}
       />
 
       {/* Modals */}
