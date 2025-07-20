@@ -11,6 +11,7 @@ import { z } from "zod";
 import { cleanupService } from "./cleanup";
 import { messages } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import fs from "fs/promises";
 
 // File upload configuration
 const upload = multer({
@@ -253,11 +254,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // User storage usage endpoint
+  app.get('/api/user/storage', requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const usage = await storage.getUserStorageUsage(userId);
+      res.json(usage);
+    } catch (error) {
+      console.error("Error fetching storage usage:", error);
+      res.status(500).json({ message: "Failed to fetch storage usage" });
+    }
+  });
+
   // File upload route
   app.post('/api/upload', requireAuth, upload.single('file'), async (req: any, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      const userId = req.user.id;
+      
+      // Check storage limit before allowing upload
+      const canUpload = await storage.checkUserStorageLimit(userId, req.file.size);
+      if (!canUpload) {
+        // Delete the uploaded file since it exceeds the limit
+        await fs.unlink(req.file.path);
+        return res.status(413).json({ 
+          message: "Storage limit exceeded. You have reached your 1GB storage limit." 
+        });
       }
 
       const fileUrl = `/uploads/${req.file.filename}`;

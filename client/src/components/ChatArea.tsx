@@ -62,6 +62,11 @@ export default function ChatArea({ selectedChat, onChatDeleted }: ChatAreaProps)
                   : chat
               )
           );
+          
+          // If the new message has media, update storage usage
+          if (message.data.mediaUrl) {
+            queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
+          }
           break;
         case 'typing':
           if (message.data.userId !== user?.id) {
@@ -95,6 +100,14 @@ export default function ChatArea({ selectedChat, onChatDeleted }: ChatAreaProps)
             queryKey: ["/api/chats", chatWithMembers?.id, "messages"]
           });
           break;
+        case 'message_deleted':
+          // Update storage usage when message is deleted
+          queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
+          break;
+        case 'chat_deleted':
+          // Update storage usage when chat is deleted
+          queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
+          break;
         case 'user_online':
           setOnlineUsers(prev => new Set([...prev, message.data.userId]));
           break;
@@ -116,6 +129,8 @@ export default function ChatArea({ selectedChat, onChatDeleted }: ChatAreaProps)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/chats"] });
+      // Invalidate storage query to update usage when chat with files is deleted
+      queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
       onChatDeleted?.(chatWithMembers!.id);
       toast({
         title: "Chat deleted",
@@ -138,6 +153,8 @@ export default function ChatArea({ selectedChat, onChatDeleted }: ChatAreaProps)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/chats", chatWithMembers?.id, "messages"] });
+      // Invalidate storage query to update usage when message with file is deleted
+      queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
       toast({
         title: "Message deleted",
         description: "The message has been deleted successfully",

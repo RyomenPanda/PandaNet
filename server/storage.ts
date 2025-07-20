@@ -56,6 +56,11 @@ export interface IStorage {
   deleteMessageFiles(messageId: number): Promise<void>;
   deleteChatFiles(chatId: number): Promise<void>;
   getFilesToCleanup(): Promise<string[]>;
+  
+  // User storage operations
+  getUserStorageUsage(userId: number): Promise<{ used: number; limit: number; files: number }>;
+  checkUserStorageLimit(userId: number, fileSize: number): Promise<boolean>;
+  updateUserStorageUsage(userId: number, fileSize: number, operation: 'add' | 'remove'): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -400,6 +405,50 @@ export class DatabaseStorage implements IStorage {
     }
 
     return files;
+  }
+
+  // User storage operations
+  async getUserStorageUsage(userId: number): Promise<{ used: number; limit: number; files: number }> {
+    const STORAGE_LIMIT = 1024 * 1024 * 1024; // 1GB in bytes
+    
+    // Get all messages with media for this user
+    const userMessages = await db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.senderId, userId),
+          sql`${messages.mediaUrl} IS NOT NULL`
+        )
+      );
+
+    let totalSize = 0;
+    let fileCount = 0;
+
+    for (const message of userMessages) {
+      if (message.mediaSize) {
+        totalSize += message.mediaSize;
+        fileCount++;
+      }
+    }
+
+    return {
+      used: totalSize,
+      limit: STORAGE_LIMIT,
+      files: fileCount
+    };
+  }
+
+  async checkUserStorageLimit(userId: number, fileSize: number): Promise<boolean> {
+    const usage = await this.getUserStorageUsage(userId);
+    return (usage.used + fileSize) <= usage.limit;
+  }
+
+  async updateUserStorageUsage(userId: number, fileSize: number, operation: 'add' | 'remove'): Promise<void> {
+    // This method is called when files are added or removed
+    // The actual storage tracking is done through the messages table
+    // This method exists for interface compliance and potential future enhancements
+    console.log(`Storage ${operation} for user ${userId}: ${fileSize} bytes`);
   }
 }
 

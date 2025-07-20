@@ -19,6 +19,7 @@ A modern real-time chat application built with React, TypeScript, and WebSocket 
 - Support for images, videos, and documents up to 10MB 
 - Automatic file type detection and appropriate rendering
 - Secure file upload with validation
+- **1GB storage limit per user** with real-time usage tracking
 - **Automatic file cleanup** with 7-day expiry
 - **Browser caching** for media files (7 days) to ensure access even after server-side deletion
 
@@ -131,6 +132,7 @@ PandaNet/
 - `POST /api/upload` - Upload media files
 
 ### File Management
+- `GET /api/user/storage` - Get user storage usage
 - `POST /api/cleanup` - Manual file cleanup (for testing)
 
 ## Database Schema
@@ -157,6 +159,8 @@ Real-time features are powered by WebSocket events:
 PandaNet includes an automated file cleanup system to manage storage efficiently:
 
 ### Features
+- **1GB storage limit**: Each user has a 1GB storage limit for media files
+- **Real-time tracking**: Storage usage is tracked in real-time as files are uploaded/deleted
 - **7-day expiry**: Files are automatically deleted after 7 days
 - **Browser caching**: Media files are cached in browsers for 7 days with proper cache headers
 - **Automatic cleanup**: Runs every 24 hours to remove expired files

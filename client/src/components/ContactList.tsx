@@ -3,13 +3,17 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import PandaLogo from "./PandaLogo";
 import { useAuth } from "@/hooks/useAuth";
-import { Search, Settings, MoreVertical, Users } from "lucide-react";
+import { Search, Settings, MoreVertical, Users, HardDrive, Plus } from "lucide-react";
 import type { Chat, User } from "@shared/schema";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import StorageModal from "./StorageModal";
+import GroupModal from "./GroupModal";
+import { Progress } from "@/components/ui/progress";
 
 interface ContactListProps {
   chats: (Chat & { 
@@ -30,6 +34,17 @@ export default function ContactList({
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
+  const [showStorageModal, setShowStorageModal] = useState(false);
+  const [showGroupModal, setShowGroupModal] = useState(false);
+
+  // Get storage usage for header indicator
+  const { data: storageData } = useQuery({
+    queryKey: ["/api/user/storage"],
+    queryFn: async () => {
+      const response = await apiRequest("GET", "/api/user/storage");
+      return response.json();
+    },
+  });
 
   // Listen for WebSocket messages to update chat list
   const { sendMessage: sendWsMessage } = useWebSocket({
@@ -45,6 +60,21 @@ export default function ContactList({
                 : chat
             )
         );
+        
+        // If the new message has media, update storage usage
+        if (message.data.mediaUrl) {
+          queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
+        }
+      }
+      
+      // Update storage when messages are deleted
+      if (message.type === 'message_deleted') {
+        queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
+      }
+      
+      // Update storage when chats are deleted
+      if (message.type === 'chat_deleted') {
+        queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
       }
     },
   });
@@ -136,6 +166,19 @@ export default function ContactList({
     }
   };
 
+  const formatBytes = (bytes: number): string => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
+  const getStorageUsagePercentage = (): number => {
+    if (!storageData) return 0;
+    return Math.round((storageData.used / storageData.limit) * 100);
+  };
+
   const getChatDisplayName = (chat: Chat | (Chat & { members: any[] })) => {
     if (chat.isGroup) {
       return chat.name || "Group Chat";
@@ -166,19 +209,55 @@ export default function ContactList({
     <div className="w-80 bg-gray-800 border-r border-gray-700 flex flex-col">
       {/* Header */}
       <div className="p-4 border-b border-gray-700">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center space-x-3">
-            <PandaLogo size="md" />
-            <h2 className="text-xl font-bold">PandaNet</h2>
+                  <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center space-x-3">
+              <PandaLogo size="md" />
+              <h2 className="text-xl font-bold">PandaNet</h2>
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-gray-400 hover:text-white hover:bg-gray-700"
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="bg-gray-800 border-gray-700 text-white">
+                <DropdownMenuItem 
+                  onClick={() => setShowStorageModal(true)}
+                  className="hover:bg-gray-700 cursor-pointer"
+                >
+                  <HardDrive className="h-4 w-4 mr-2" />
+                  Check Storage
+                </DropdownMenuItem>
+                <DropdownMenuItem 
+                  onClick={() => setShowGroupModal(true)}
+                  className="hover:bg-gray-700 cursor-pointer"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Group
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="text-gray-400 hover:text-white hover:bg-gray-700"
-          >
-            <MoreVertical className="h-4 w-4" />
-          </Button>
-        </div>
+          
+          {/* Storage Usage Indicator */}
+          {storageData && (
+            <div className="mb-3 p-2 bg-gray-700 rounded-lg">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-gray-400">Storage</span>
+                <span className="text-xs text-gray-300">
+                  {formatBytes(storageData.used)} / {formatBytes(storageData.limit)}
+                </span>
+              </div>
+              <Progress 
+                value={getStorageUsagePercentage()} 
+                className="h-1.5 bg-gray-600"
+              />
+            </div>
+          )}
         <div className="relative">
           <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
           <Input
@@ -251,11 +330,23 @@ export default function ContactList({
                         : 'No messages yet'
                       }
                     </p>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+                          </div>
+      </div>
+
+      {/* Storage Modal */}
+      <StorageModal 
+        open={showStorageModal} 
+        onOpenChange={setShowStorageModal} 
+      />
+
+      {/* Group Modal */}
+      <GroupModal 
+        open={showGroupModal} 
+        onOpenChange={setShowGroupModal} 
+      />
+    </div>
+  );
+})}
 
           {/* User search results (if no chat matches) */}
           {shouldSearchUsers && (

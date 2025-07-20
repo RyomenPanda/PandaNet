@@ -4,8 +4,6 @@ import ContactList from "@/components/ContactList";
 import ChatArea from "@/components/ChatArea";
 import ProfileModal from "@/components/ProfileModal";
 import GroupModal from "@/components/GroupModal";
-import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { Chat, User } from "@shared/schema";
 
@@ -56,14 +54,7 @@ export default function Chat() {
         }}
       />
 
-      {/* Floating Action Button */}
-      <Button
-        onClick={() => setShowGroupModal(true)}
-        className="fixed bottom-6 right-6 w-14 h-14 bg-purple-600 hover:bg-purple-700 rounded-full shadow-lg z-40 pt-[14px] pb-[14px]"
-        size="icon"
-      >
-        <Plus className="h-6 w-6" />
-      </Button>
+
 
       {/* Modals */}
       <ProfileModal 

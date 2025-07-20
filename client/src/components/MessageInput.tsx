@@ -90,6 +90,9 @@ export default function MessageInput({ chatId, onTyping }: MessageInputProps) {
         mediaName: fileData.name,
         mediaSize: fileData.size,
       });
+      
+      // Invalidate storage query to update usage
+      queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
     },
     onError: (error) => {
       if (isUnauthorizedError(error)) {
@@ -103,6 +106,17 @@ export default function MessageInput({ chatId, onTyping }: MessageInputProps) {
         }, 500);
         return;
       }
+      
+      // Check if it's a storage limit error
+      if (error.message?.includes('Storage limit exceeded')) {
+        toast({
+          title: "Storage Limit Exceeded",
+          description: "You have reached your 1GB storage limit. Please delete some files to free up space.",
+          variant: "destructive",
+        });
+        return;
+      }
+      
       toast({
         title: "Error",
         description: "Failed to upload file",
