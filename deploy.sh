@@ -109,6 +109,15 @@ npm run db:push
 
 # Create systemd service file
 print_status "Creating systemd service..."
+
+# Find Node.js path dynamically
+NODE_PATH=$(which node)
+if [ -z "$NODE_PATH" ]; then
+    print_error "Node.js not found in PATH. Please install Node.js first."
+    exit 1
+fi
+print_status "Found Node.js at: $NODE_PATH"
+
 sudo tee "/etc/systemd/system/$SERVICE_NAME.service" > /dev/null <<EOF
 [Unit]
 Description=PandaNet Chat Application
@@ -120,7 +129,7 @@ User=$CURRENT_USER
 WorkingDirectory=$APP_DIR
 Environment=NODE_ENV=production
 Environment=PORT=$PORT
-ExecStart=/usr/bin/node server/index.js
+ExecStart=$NODE_PATH server/index.js
 Restart=always
 RestartSec=10
 StandardOutput=journal
