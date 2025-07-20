@@ -45,7 +45,7 @@ export default function ChatArea({
   // Use selectedChat directly since it already contains member data from ContactList
   const chatWithMembers = selectedChat;
 
-  const { data: messages, isLoading } = useQuery({
+  const { data: messages = [], isLoading } = useQuery<(Message & { sender: User })[]>({
     queryKey: ["/api/chats", chatWithMembers?.id, "messages"],
     enabled: !!chatWithMembers,
   });
@@ -119,7 +119,7 @@ export default function ChatArea({
 
   // Mark messages as seen when messages are visible (only for messages from other users)
   useEffect(() => {
-    if (chatWithMembers && user && messages && messages.length > 0) {
+    if (chatWithMembers && user && messages.length > 0) {
       const markAsSeen = async () => {
         try {
           await apiRequest("POST", `/api/chats/${chatWithMembers.id}/mark-seen`);
@@ -203,7 +203,8 @@ export default function ChatArea({
     return otherUserId ? onlineUsers.has(otherUserId) : false;
   };
 
-  const formatMessageTime = (dateString: string) => {
+  const formatMessageTime = (dateString: string | Date | null) => {
+    if (!dateString) return "";
     return new Date(dateString).toLocaleTimeString([], { 
       hour: '2-digit', 
       minute: '2-digit' 
@@ -314,7 +315,7 @@ export default function ChatArea({
         <div className="space-y-4">
           {isLoading ? (
             <div className="text-center text-gray-400">Loading messages...</div>
-          ) : messages && messages.length > 0 ? (
+          ) : messages.length > 0 ? (
             messages.map((message: Message & { sender: User }) => {
               const isOwnMessage = message.senderId === user?.id;
               
@@ -330,7 +331,7 @@ export default function ChatArea({
                       <AvatarImage src={message.sender.profileImageUrl || undefined} />
                       <AvatarFallback className="bg-gray-600 text-white text-xs">
                         {message.sender.displayName?.charAt(0) || 
-                         message.sender.firstName?.charAt(0) || 'U'}
+                        message.sender.firstName?.charAt(0) || 'U'}
                       </AvatarFallback>
                     </Avatar>
                   )}
@@ -418,7 +419,7 @@ export default function ChatArea({
                       </p>
                       {isOwnMessage && (
                         <ReadReceipts 
-                          status={message.status || "sent"} 
+                          status={(message.status || "sent") as "sent" | "delivered" | "seen"} 
                           className="ml-2" 
                         />
                       )}

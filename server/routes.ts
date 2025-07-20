@@ -495,6 +495,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           client.send(JSON.stringify({
             type: 'message_status_update',
             data: {
+              chatId: message.chatId,
               messageId: parseInt(messageId),
               status,
               userId,

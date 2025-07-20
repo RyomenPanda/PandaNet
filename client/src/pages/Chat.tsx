@@ -28,25 +28,27 @@ export default function Chat() {
     onMessage: (message) => {
       switch (message.type) {
         case 'new_message':
-          // Update messages in the current chat
+          const { chatId: newMessageChatId, ...newMessageData } = message.data;
+
+          // Update the message list for the specific chat
           queryClient.setQueryData(
-            ["/api/chats", selectedChat?.id, "messages"],
-            (oldMessages: any[] = []) => [...oldMessages, message.data]
+            ["/api/chats", newMessageChatId, "messages"],
+            (oldMessages: any[] = []) => [...oldMessages, newMessageData]
           );
           
-          // Update the lastMessage in the chats query cache
+          // Update the lastMessage in the main chats list
           queryClient.setQueryData(
             ["/api/chats"],
             (oldChats: any[] = []) => 
               oldChats.map(chat => 
-                chat.id === message.data.chatId 
-                  ? { ...chat, lastMessage: message.data }
+                chat.id === newMessageChatId
+                  ? { ...chat, lastMessage: newMessageData }
                   : chat
               )
           );
           
           // If the new message has media, update storage usage
-          if (message.data.mediaUrl) {
+          if (newMessageData.mediaUrl) {
             queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
           }
           break;
@@ -66,13 +68,15 @@ export default function Chat() {
           break;
           
         case 'message_status_update':
-          // Update message status in cache
+          const { chatId: statusUpdateChatId, messageId, status } = message.data;
+          
+          // Update message status in the specific chat's cache
           queryClient.setQueryData(
-            ["/api/chats", selectedChat?.id, "messages"],
+            ["/api/chats", statusUpdateChatId, "messages"],
             (oldMessages: any[] = []) => 
               oldMessages.map(msg => 
-                msg.id === message.data.messageId 
-                  ? { ...msg, status: message.data.status }
+                msg.id === messageId 
+                  ? { ...msg, status: status }
                   : msg
               )
           );
@@ -80,13 +84,16 @@ export default function Chat() {
           
         case 'messages_delivered':
         case 'messages_seen':
-          // Refresh messages to get updated statuses
+          const { chatId: seenUpdateChatId } = message.data;
+          // Refresh messages for the specific chat to get updated statuses
           queryClient.invalidateQueries({
-            queryKey: ["/api/chats", selectedChat?.id, "messages"]
+            queryKey: ["/api/chats", seenUpdateChatId, "messages"]
           });
           break;
           
         case 'message_deleted':
+          const { chatId: deletedMessageChatId } = message.data;
+          queryClient.invalidateQueries({ queryKey: ["/api/chats", deletedMessageChatId, "messages"] });
           // Update storage usage when message is deleted
           queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
           break;
