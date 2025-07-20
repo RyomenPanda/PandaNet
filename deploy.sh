@@ -101,7 +101,7 @@ chmod 755 "$APP_DIR/uploads"
 # Install dependencies
 print_status "Installing dependencies..."
 cd "$APP_DIR"
-npm ci --only=production
+npm ci
 
 # Run database migration
 print_status "Running database migration..."
