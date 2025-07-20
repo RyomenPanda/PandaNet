@@ -92,11 +92,20 @@ export default function Chat() {
         
       case 'messages_delivered':
       case 'messages_seen':
-        const { chatId: seenUpdateChatId } = message.data;
-        // Refresh messages for the specific chat to get updated statuses
-        queryClient.invalidateQueries({
-          queryKey: ["/api/chats", seenUpdateChatId, "messages"]
-        });
+        const { chatId: updateChatId } = message.data;
+        const newStatus = message.type === 'messages_seen' ? 'seen' : 'delivered';
+
+        queryClient.setQueryData(
+          ["/api/chats", updateChatId, "messages"],
+          (oldMessages: any[] = []) =>
+            oldMessages.map(msg => {
+              // Only update messages that are not our own and have a lower status
+              if (msg.senderId !== user?.id && (msg.status === 'sent' || (newStatus === 'seen' && msg.status === 'delivered'))) {
+                return { ...msg, status: newStatus };
+              }
+              return msg;
+            })
+        );
         break;
         
       case 'message_deleted':
