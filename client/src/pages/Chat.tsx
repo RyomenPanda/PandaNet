@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import ContactList from "@/components/ContactList";
 import ChatArea from "@/components/ChatArea";
@@ -7,6 +7,11 @@ import GroupModal from "@/components/GroupModal";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import type { Chat, User } from "@shared/schema";
+
+interface WebSocketMessage {
+  type: string;
+  data: any;
+}
 
 export default function Chat() {
   const { user } = useAuth();
@@ -23,104 +28,101 @@ export default function Chat() {
     enabled: !!user,
   });
 
-  // Update the WebSocket message handler to include typing events and polling fallback
-  const { sendMessage: sendWsMessage, isConnected: wsConnected } = useWebSocket({
-    onMessage: (message) => {
-      switch (message.type) {
-        case 'new_message':
-          const { chatId: newMessageChatId, ...newMessageData } = message.data;
+  const handleWebSocketMessage = useCallback((message: WebSocketMessage) => {
+    switch (message.type) {
+      case 'new_message':
+        const { chatId: newMessageChatId, ...newMessageData } = message.data;
 
-          // Update the message list for the specific chat
-          queryClient.setQueryData(
-            ["/api/chats", newMessageChatId, "messages"],
-            (oldMessages: any[] = []) => [...oldMessages, newMessageData]
-          );
-          
-          // Update the lastMessage in the main chats list
-          queryClient.setQueryData(
-            ["/api/chats"],
-            (oldChats: any[] = []) => 
-              oldChats.map(chat => 
-                chat.id === newMessageChatId
-                  ? { ...chat, lastMessage: newMessageData }
-                  : chat
-              )
-          );
-          
-          // If the new message has media, update storage usage
-          if (newMessageData.mediaUrl) {
-            queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
-          }
-          break;
-          
-        case 'typing':
-          if (message.data.userId !== user?.id) {
-            setTypingUsers(prev => {
-              const newSet = new Set(prev);
-              if (message.data.typing) {
-                newSet.add(message.data.userId);
-              } else {
-                newSet.delete(message.data.userId);
-              }
-              return newSet;
-            });
-          }
-          break;
-          
-        case 'message_status_update':
-          const { chatId: statusUpdateChatId, messageId, status } = message.data;
-          
-          // Update message status in the specific chat's cache
-          queryClient.setQueryData(
-            ["/api/chats", statusUpdateChatId, "messages"],
-            (oldMessages: any[] = []) => 
-              oldMessages.map(msg => 
-                msg.id === messageId 
-                  ? { ...msg, status: status }
-                  : msg
-              )
-          );
-          break;
-          
-        case 'messages_delivered':
-        case 'messages_seen':
-          const { chatId: seenUpdateChatId } = message.data;
-          // Refresh messages for the specific chat to get updated statuses
-          queryClient.invalidateQueries({
-            queryKey: ["/api/chats", seenUpdateChatId, "messages"]
-          });
-          break;
-          
-        case 'message_deleted':
-          const { chatId: deletedMessageChatId } = message.data;
-          queryClient.invalidateQueries({ queryKey: ["/api/chats", deletedMessageChatId, "messages"] });
-          // Update storage usage when message is deleted
+        // Update the message list for the specific chat
+        queryClient.setQueryData(
+          ["/api/chats", newMessageChatId, "messages"],
+          (oldMessages: any[] = []) => [...oldMessages, newMessageData]
+        );
+        
+        // Update the lastMessage in the main chats list
+        queryClient.setQueryData(
+          ["/api/chats"],
+          (oldChats: any[] = []) => 
+            oldChats.map(chat => 
+              chat.id === newMessageChatId
+                ? { ...chat, lastMessage: newMessageData }
+                : chat
+            )
+        );
+        
+        // If the new message has media, update storage usage
+        if (newMessageData.mediaUrl) {
           queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
-          break;
-          
-        case 'chat_deleted':
-          // Update storage usage when chat is deleted
-          queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
-          break;
-          
-        case 'user_online':
-          setOnlineUsers(prev => new Set(Array.from(prev).concat(message.data.userId)));
-          break;
-          
-        case 'user_offline':
-          setOnlineUsers(prev => {
+        }
+        break;
+        
+      case 'typing':
+        if (message.data.userId !== user?.id) {
+          setTypingUsers(prev => {
             const newSet = new Set(prev);
-            newSet.delete(message.data.userId);
+            if (message.data.typing) {
+              newSet.add(message.data.userId);
+            } else {
+              newSet.delete(message.data.userId);
+            }
             return newSet;
           });
-          break;
-          
-        case 'online_users_update':
-          // Update online users from polling
-          setOnlineUsers(new Set(message.data.onlineUsers));
-          break;
-      }
-    },
+        }
+        break;
+        
+      case 'message_status_update':
+        const { chatId: statusUpdateChatId, messageId, status } = message.data;
+        
+        // Update message status in the specific chat's cache
+        queryClient.setQueryData(
+          ["/api/chats", statusUpdateChatId, "messages"],
+          (oldMessages: any[] = []) => 
+            oldMessages.map(msg => 
+              msg.id === messageId 
+                ? { ...msg, status: status }
+                : msg
+            )
+        );
+        break;
+        
+      case 'messages_delivered':
+      case 'messages_seen':
+        const { chatId: seenUpdateChatId } = message.data;
+        // Refresh messages for the specific chat to get updated statuses
+        queryClient.invalidateQueries({
+          queryKey: ["/api/chats", seenUpdateChatId, "messages"]
+        });
+        break;
+        
+      case 'message_deleted':
+        const { chatId: deletedMessageChatId } = message.data;
+        queryClient.invalidateQueries({ queryKey: ["/api/chats", deletedMessageChatId, "messages"] });
+        // Update storage usage when message is deleted
+        queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
+        break;
+        
+      case 'chat_deleted':
+        // Update storage usage when chat is deleted
+        queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
+        break;
+        
+      case 'user_online':
+        setOnlineUsers(prev => new Set(Array.from(prev).concat(message.data.userId)));
+        break;
+        
+      case 'user_offline':
+        setOnlineUsers(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(message.data.userId);
+          return newSet;
+        });
+        break;
+    }
+  }, [queryClient, user]);
+
+  // Update the WebSocket message handler to include typing events and polling fallback
+  const { sendMessage: sendWsMessage, isConnected: wsConnected } = useWebSocket({
+    onMessage: handleWebSocketMessage,
   });
 
   // Join chat when selected
