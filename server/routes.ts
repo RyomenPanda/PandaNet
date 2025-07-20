@@ -284,15 +284,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const message = await storage.createMessage(messageData);
       
-      // Respond immediately to the sender
-      res.status(201).json(message);
+      const sender = await storage.getUser(userId);
+      const messageWithSender = { ...message, sender };
+      
+      // Respond immediately to the sender with the full message object
+      res.status(201).json(messageWithSender);
 
-      // Asynchronously prepare and broadcast the message
+      // Asynchronously broadcast the message
       (async () => {
         try {
-          const sender = await storage.getUser(userId);
           if (sender) {
-            const messageWithSender = { ...message, sender };
             broadcastToChat(chatId, {
               type: 'new_message',
               data: messageWithSender,

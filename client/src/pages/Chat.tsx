@@ -31,6 +31,11 @@ export default function Chat() {
   const handleWebSocketMessage = useCallback((message: WebSocketMessage) => {
     switch (message.type) {
       case 'new_message':
+        // Ignore messages sent by the current user, as they are handled optimistically
+        if (message.data.senderId === user?.id) {
+          return;
+        }
+
         const { chatId: newMessageChatId, ...newMessageData } = message.data;
 
         // Update the message list for the specific chat

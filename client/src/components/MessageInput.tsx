@@ -25,9 +25,24 @@ export default function MessageInput({ chatId, onTyping }: MessageInputProps) {
       const response = await apiRequest("POST", `/api/chats/${chatId}/messages`, messageData);
       return response.json();
     },
-    onSuccess: () => {
-      // The message list is now updated via WebSocket, so no manual invalidation is needed here.
-      // We only need to clear the input field.
+    onSuccess: (newMessage) => {
+      // Optimistically update the message list
+      queryClient.setQueryData(
+        ["/api/chats", chatId, "messages"],
+        (oldMessages: any[] = []) => [...oldMessages, newMessage]
+      );
+      
+      // Update the lastMessage in the main chats list
+      queryClient.setQueryData(
+        ["/api/chats"],
+        (oldChats: any[] = []) => 
+          oldChats.map(chat => 
+            chat.id === chatId 
+              ? { ...chat, lastMessage: newMessage }
+              : chat
+          )
+      );
+
       setMessage("");
     },
     onError: (error) => {
