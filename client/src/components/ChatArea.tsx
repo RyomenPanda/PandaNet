@@ -22,15 +22,21 @@ interface ChatAreaProps {
     lastMessage?: any;
   }) | null;
   onChatDeleted?: (chatId: number) => void;
+  sendWsMessage: (message: any) => void; // Add this prop
+  onlineUsers: Set<number>; // Add this prop
 }
 
-export default function ChatArea({ selectedChat, onChatDeleted }: ChatAreaProps) {
+export default function ChatArea({ 
+  selectedChat, 
+  onChatDeleted,
+  sendWsMessage,
+  onlineUsers
+}: ChatAreaProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
-  const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showProfilePreview, setShowProfilePreview] = useState(false);
   const [messageToDelete, setMessageToDelete] = useState<Message | null>(null);
@@ -41,85 +47,6 @@ export default function ChatArea({ selectedChat, onChatDeleted }: ChatAreaProps)
   const { data: messages, isLoading } = useQuery({
     queryKey: ["/api/chats", chatWithMembers?.id, "messages"],
     enabled: !!chatWithMembers,
-  });
-
-  const { sendMessage: sendWsMessage } = useWebSocket({
-    onMessage: (message) => {
-      switch (message.type) {
-        case 'new_message':
-          queryClient.setQueryData(
-            ["/api/chats", chatWithMembers?.id, "messages"],
-            (oldMessages: any[] = []) => [...oldMessages, message.data]
-          );
-          
-          // Update the lastMessage in the chats query cache
-          queryClient.setQueryData(
-            ["/api/chats"],
-            (oldChats: any[] = []) => 
-              oldChats.map(chat => 
-                chat.id === chatWithMembers?.id 
-                  ? { ...chat, lastMessage: message.data }
-                  : chat
-              )
-          );
-          
-          // If the new message has media, update storage usage
-          if (message.data.mediaUrl) {
-            queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
-          }
-          break;
-        case 'typing':
-          if (message.data.userId !== user?.id) {
-            setTypingUsers(prev => {
-              const newSet = new Set(prev);
-              if (message.data.typing) {
-                newSet.add(message.data.userId);
-              } else {
-                newSet.delete(message.data.userId);
-              }
-              return newSet;
-            });
-          }
-          break;
-        case 'message_status_update':
-          // Update message status in cache
-          queryClient.setQueryData(
-            ["/api/chats", chatWithMembers?.id, "messages"],
-            (oldMessages: any[] = []) => 
-              oldMessages.map(msg => 
-                msg.id === message.data.messageId 
-                  ? { ...msg, status: message.data.status }
-                  : msg
-              )
-          );
-          break;
-        case 'messages_delivered':
-        case 'messages_seen':
-          // Refresh messages to get updated statuses
-          queryClient.invalidateQueries({
-            queryKey: ["/api/chats", chatWithMembers?.id, "messages"]
-          });
-          break;
-        case 'message_deleted':
-          // Update storage usage when message is deleted
-          queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
-          break;
-        case 'chat_deleted':
-          // Update storage usage when chat is deleted
-          queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
-          break;
-        case 'user_online':
-          setOnlineUsers(prev => new Set([...prev, message.data.userId]));
-          break;
-        case 'user_offline':
-          setOnlineUsers(prev => {
-            const newSet = new Set(prev);
-            newSet.delete(message.data.userId);
-            return newSet;
-          });
-          break;
-      }
-    },
   });
 
   // Delete chat mutation

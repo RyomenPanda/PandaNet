@@ -23,13 +23,15 @@ interface ContactListProps {
   selectedChat: Chat | null;
   onSelectChat: (chat: Chat) => void;
   onShowProfile: () => void;
+  onlineUsers: Set<number>; // Add this prop
 }
 
 export default function ContactList({ 
   chats, 
   selectedChat, 
   onSelectChat, 
-  onShowProfile 
+  onShowProfile,
+  onlineUsers // Add this prop
 }: ContactListProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
