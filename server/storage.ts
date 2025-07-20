@@ -13,7 +13,9 @@ import {
   type InsertChatMember,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, or, ne, sql } from "drizzle-orm";
+import { eq, and, desc, or, ne, sql, lt } from "drizzle-orm";
+import fs from "fs/promises";
+import path from "path";
 
 // Interface for storage operations
 export interface IStorage {
@@ -38,6 +40,7 @@ export interface IStorage {
   updateMessageStatus(messageId: number, status: string, userId: number): Promise<Message | undefined>;
   markChatMessagesAsDelivered(chatId: number, userId: number): Promise<void>;
   markChatMessagesAsSeen(chatId: number, userId: number): Promise<void>;
+  deleteMessage(messageId: number, userId: number): Promise<void>;
   
   // Chat member operations
   addChatMember(member: InsertChatMember): Promise<ChatMember>;
@@ -46,6 +49,13 @@ export interface IStorage {
   isUserInChat(chatId: number, userId: number): Promise<boolean>;
   deleteChat(chatId: number, userId: number): Promise<void>;
   searchUsersByUsername(username: string, excludeUserId: number): Promise<User[]>;
+  
+  // File cleanup operations
+  cleanupExpiredFiles(): Promise<void>;
+  deleteUserFiles(userId: number): Promise<void>;
+  deleteMessageFiles(messageId: number): Promise<void>;
+  deleteChatFiles(chatId: number): Promise<void>;
+  getFilesToCleanup(): Promise<string[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -239,6 +249,14 @@ export class DatabaseStorage implements IStorage {
       );
   }
 
+  async deleteMessage(messageId: number, userId: number): Promise<void> {
+    // Delete the message itself
+    await db.delete(messages).where(eq(messages.id, messageId));
+
+    // Delete associated files
+    await this.deleteMessageFiles(messageId);
+  }
+
   // Chat member operations
   async addChatMember(member: InsertChatMember): Promise<ChatMember> {
     const [newMember] = await db.insert(chatMembers).values(member).returning();
@@ -283,6 +301,9 @@ export class DatabaseStorage implements IStorage {
     
     // Delete the chat itself
     await db.delete(chats).where(eq(chats.id, chatId));
+
+    // Delete associated files
+    await this.deleteChatFiles(chatId);
   }
 
   async searchUsersByUsername(username: string, excludeUserId: number): Promise<User[]> {
@@ -295,6 +316,90 @@ export class DatabaseStorage implements IStorage {
         )
       );
     return result;
+  }
+
+  // File cleanup operations
+  async cleanupExpiredFiles(): Promise<void> {
+    const filesToCleanup = await this.getFilesToCleanup();
+    for (const filePath of filesToCleanup) {
+      try {
+        await fs.unlink(filePath);
+        console.log(`Deleted expired file: ${filePath}`);
+      } catch (error) {
+        console.error(`Error deleting expired file ${filePath}:`, error);
+      }
+    }
+  }
+
+  async deleteUserFiles(userId: number): Promise<void> {
+    const userDir = path.join(process.cwd(), "uploads", userId.toString());
+    try {
+      await fs.rm(userDir, { recursive: true, force: true });
+      console.log(`Deleted user files for user ${userId}: ${userDir}`);
+    } catch (error) {
+      console.error(`Error deleting user files for user ${userId}:`, error);
+    }
+  }
+
+  async deleteMessageFiles(messageId: number): Promise<void> {
+    const [message] = await db.select().from(messages).where(eq(messages.id, messageId));
+    if (!message) {
+      console.warn(`Message with ID ${messageId} not found for file cleanup.`);
+      return;
+    }
+
+    if (message.mediaUrl) {
+      const fileName = path.basename(message.mediaUrl);
+      const filePath = path.join(process.cwd(), "uploads", fileName);
+      try {
+        await fs.unlink(filePath);
+        console.log(`Deleted message file for message ${messageId}: ${filePath}`);
+      } catch (error) {
+        console.error(`Error deleting message file for message ${messageId}:`, error);
+      }
+    }
+  }
+
+  async deleteChatFiles(chatId: number): Promise<void> {
+    const chat = await db.select().from(chats).where(eq(chats.id, chatId));
+    if (!chat || !chat[0]) {
+      console.warn(`Chat with ID ${chatId} not found for file cleanup.`);
+      return;
+    }
+
+    const chatDir = path.join(process.cwd(), "uploads", chat[0].id.toString());
+    try {
+      await fs.rm(chatDir, { recursive: true, force: true });
+      console.log(`Deleted chat files for chat ${chatId}: ${chatDir}`);
+    } catch (error) {
+      console.error(`Error deleting chat files for chat ${chatId}:`, error);
+    }
+  }
+
+  async getFilesToCleanup(): Promise<string[]> {
+    const files: string[] = [];
+    const now = new Date();
+    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    // Get all messages with media that are older than 7 days
+    const messagesToCleanup = await db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          lt(messages.createdAt, oneWeekAgo),
+          sql`${messages.mediaUrl} IS NOT NULL`
+        )
+      );
+
+    for (const message of messagesToCleanup) {
+      if (message.mediaUrl) {
+        const fileName = path.basename(message.mediaUrl);
+        files.push(path.join(process.cwd(), "uploads", fileName));
+      }
+    }
+
+    return files;
   }
 }
 

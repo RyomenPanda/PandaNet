@@ -19,6 +19,8 @@ A modern real-time chat application built with React, TypeScript, and WebSocket 
 - Support for images, videos, and documents up to 10MB 
 - Automatic file type detection and appropriate rendering
 - Secure file upload with validation
+- **Automatic file cleanup** with 7-day expiry
+- **Browser caching** for media files (7 days) to ensure access even after server-side deletion
 
 ### 👥 User Management
 - **Profile System**: Customizable profiles with display names and profile pictures
@@ -123,9 +125,13 @@ PandaNet/
 ### Messages
 - `GET /api/chats/:chatId/messages` - Get chat messages
 - `POST /api/chats/:chatId/messages` - Send message 
+- `DELETE /api/messages/:id` - Delete message
 
 ### File Upload
 - `POST /api/upload` - Upload media files
+
+### File Management
+- `POST /api/cleanup` - Manual file cleanup (for testing)
 
 ## Database Schema
 
@@ -145,6 +151,24 @@ Real-time features are powered by WebSocket events:
 - `typing` - User typing indicators
 - `message_status_update` - Message delivery/read status
 - `user_online`/`user_offline` - Presence updates
+
+## File Cleanup System
+
+PandaNet includes an automated file cleanup system to manage storage efficiently:
+
+### Features
+- **7-day expiry**: Files are automatically deleted after 7 days
+- **Browser caching**: Media files are cached in browsers for 7 days with proper cache headers
+- **Automatic cleanup**: Runs every 24 hours to remove expired files
+- **Manual cleanup**: Available via API endpoint for testing
+- **Smart deletion**: Files are cleaned up when messages, chats, or users are deleted
+
+### Cache Headers
+Media files are served with the following cache headers:
+- `Cache-Control: public, max-age=604800, immutable` (7 days)
+- `Expires: [7 days from now]`
+
+This ensures that even if a file is deleted from the server after 7 days, users can still access it from their browser cache until they clear it.
 
 ## Development Scripts
 

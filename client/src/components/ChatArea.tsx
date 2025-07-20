@@ -10,7 +10,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { MoreVertical, Users, Trash2 } from "lucide-react";
+import { MoreVertical, Users, Trash2, MoreHorizontal } from "lucide-react";
 import type { Chat, Message, User } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation } from "@tanstack/react-query";
@@ -33,6 +33,7 @@ export default function ChatArea({ selectedChat, onChatDeleted }: ChatAreaProps)
   const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showProfilePreview, setShowProfilePreview] = useState(false);
+  const [messageToDelete, setMessageToDelete] = useState<Message | null>(null);
 
   // Use selectedChat directly since it already contains member data from ContactList
   const chatWithMembers = selectedChat;
@@ -125,6 +126,27 @@ export default function ChatArea({ selectedChat, onChatDeleted }: ChatAreaProps)
       toast({
         title: "Error",
         description: "Failed to delete chat",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Delete message mutation
+  const deleteMessageMutation = useMutation({
+    mutationFn: async (messageId: number) => {
+      await apiRequest("DELETE", `/api/messages/${messageId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/chats", chatWithMembers?.id, "messages"] });
+      toast({
+        title: "Message deleted",
+        description: "The message has been deleted successfully",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Error",
+        description: "Failed to delete message",
         variant: "destructive",
       });
     },
@@ -249,6 +271,17 @@ export default function ChatArea({ selectedChat, onChatDeleted }: ChatAreaProps)
     }
   };
 
+  const handleDeleteMessage = (message: Message) => {
+    setMessageToDelete(message);
+  };
+
+  const confirmDeleteMessage = () => {
+    if (messageToDelete) {
+      deleteMessageMutation.mutate(messageToDelete.id);
+      setMessageToDelete(null);
+    }
+  };
+
   if (!chatWithMembers) {
     return (
       <div className="flex-1 flex items-center justify-center bg-black">
@@ -358,50 +391,76 @@ export default function ChatArea({ selectedChat, onChatDeleted }: ChatAreaProps)
                   )}
                   
                   <div className={isOwnMessage ? 'order-first' : ''}>
-                    <div
-                      className={`rounded-2xl p-4 max-w-md ${
-                        isOwnMessage
-                          ? 'bg-purple-600 text-white rounded-tr-md'
-                          : 'bg-gray-800 text-white rounded-tl-md'
-                      }`}
-                    >
-                      {message.messageType === 'text' ? (
-                        <p>{message.content}</p>
-                      ) : (
-                        <div>
-                          {message.mediaUrl && (
-                            <>
-                              {message.messageType === 'image' && (
-                                <img 
-                                  src={message.mediaUrl} 
-                                  alt={message.mediaName || 'Image'} 
-                                  className="rounded-lg max-w-full h-auto mb-2"
-                                />
-                              )}
-                              {message.messageType === 'video' && (
-                                <video 
-                                  src={message.mediaUrl} 
-                                  controls 
-                                  className="rounded-lg max-w-full h-auto mb-2"
-                                />
-                              )}
-                              {message.messageType === 'document' && (
-                                <div className="flex items-center space-x-2 p-2 bg-gray-700 rounded-lg mb-2">
-                                  <div className="w-8 h-8 bg-purple-600 rounded flex items-center justify-center">
-                                    📄
+                    <div className="relative group">
+                      <div
+                        className={`rounded-2xl p-4 max-w-md ${
+                          isOwnMessage
+                            ? 'bg-purple-600 text-white rounded-tr-md'
+                            : 'bg-gray-800 text-white rounded-tl-md'
+                        }`}
+                      >
+                        {message.messageType === 'text' ? (
+                          <p>{message.content}</p>
+                        ) : (
+                          <div>
+                            {message.mediaUrl && (
+                              <>
+                                {message.messageType === 'image' && (
+                                  <img 
+                                    src={message.mediaUrl} 
+                                    alt={message.mediaName || 'Image'} 
+                                    className="rounded-lg max-w-full h-auto mb-2"
+                                  />
+                                )}
+                                {message.messageType === 'video' && (
+                                  <video 
+                                    src={message.mediaUrl} 
+                                    controls 
+                                    className="rounded-lg max-w-full h-auto mb-2"
+                                  />
+                                )}
+                                {message.messageType === 'document' && (
+                                  <div className="flex items-center space-x-2 p-2 bg-gray-700 rounded-lg mb-2">
+                                    <div className="w-8 h-8 bg-purple-600 rounded flex items-center justify-center">
+                                      📄
+                                    </div>
+                                    <div>
+                                      <p className="text-sm font-medium">{message.mediaName}</p>
+                                      <p className="text-xs text-gray-400">
+                                        {message.mediaSize && `${(message.mediaSize / 1024).toFixed(1)} KB`}
+                                      </p>
+                                    </div>
                                   </div>
-                                  <div>
-                                    <p className="text-sm font-medium">{message.mediaName}</p>
-                                    <p className="text-xs text-gray-400">
-                                      {message.mediaSize && `${(message.mediaSize / 1024).toFixed(1)} KB`}
-                                    </p>
-                                  </div>
-                                </div>
-                              )}
-                            </>
-                          )}
-                          {message.content && <p>{message.content}</p>}
-                        </div>
+                                )}
+                              </>
+                            )}
+                            {message.content && <p>{message.content}</p>}
+                          </div>
+                        )}
+                      </div>
+                      
+                      {/* Message options dropdown (only for own messages) */}
+                      {isOwnMessage && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-white hover:bg-gray-700"
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="bg-gray-800 border-gray-700 text-white">
+                            <DropdownMenuItem 
+                              onClick={() => handleDeleteMessage(message)}
+                              className="text-red-400 hover:text-red-300 hover:bg-gray-700 cursor-pointer"
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Delete Message
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       )}
                     </div>
                     <div 
@@ -490,6 +549,30 @@ export default function ChatArea({ selectedChat, onChatDeleted }: ChatAreaProps)
               className="bg-red-600 hover:bg-red-700"
             >
               {deleteChatMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Message Confirmation Dialog */}
+      <AlertDialog open={!!messageToDelete} onOpenChange={() => setMessageToDelete(null)}>
+        <AlertDialogContent className="bg-gray-800 border-gray-700 text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Message</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this message? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-gray-600 text-white hover:bg-gray-700">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={confirmDeleteMessage}
+              disabled={deleteMessageMutation.isPending}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {deleteMessageMutation.isPending ? "Deleting..." : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

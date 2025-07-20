@@ -8,6 +8,9 @@ import { storage } from "./storage";
 import { setupAuth, requireAuth } from "./auth";
 import { insertChatSchema, insertMessageSchema, insertChatMemberSchema } from "@shared/schema";
 import { z } from "zod";
+import { cleanupService } from "./cleanup";
+import { messages } from "@shared/schema";
+import { eq } from "drizzle-orm";
 
 // File upload configuration
 const upload = multer({
@@ -170,6 +173,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Delete message endpoint
+  app.delete('/api/messages/:messageId', requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const messageId = parseInt(req.params.messageId);
+      
+      // Get the message to check ownership and get media info
+      const messages = await db.select().from(messages).where(eq(messages.id, messageId));
+      const message = messages[0];
+      
+      if (!message) {
+        return res.status(404).json({ message: "Message not found" });
+      }
+      
+      if (message.senderId !== userId) {
+        return res.status(403).json({ message: "Not authorized to delete this message" });
+      }
+
+      await storage.deleteMessage(messageId, userId);
+      
+      // Broadcast message deletion to WebSocket clients
+      broadcastToChat(message.chatId, {
+        type: 'message_deleted',
+        data: { messageId },
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting message:", error);
+      res.status(500).json({ message: "Failed to delete message" });
+    }
+  });
+
   app.delete('/api/chats/:chatId', requireAuth, async (req: any, res) => {
     try {
       const userId = req.user.id;
@@ -181,7 +217,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Not authorized to delete this chat" });
       }
 
+      // Get all messages in the chat before deletion for file cleanup
+      const messages = await storage.getChatMessages(chatId);
+      
       await storage.deleteChat(chatId, userId);
+      
+      // Clean up associated files
+      for (const message of messages) {
+        if (message.mediaUrl) {
+          await cleanupService.cleanupMessageFiles(message.id);
+        }
+      }
       
       // Broadcast chat deletion to WebSocket clients
       broadcastToChat(chatId, {
@@ -193,6 +239,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error deleting chat:", error);
       res.status(500).json({ message: "Failed to delete chat" });
+    }
+  });
+
+  // Manual cleanup endpoint (for testing)
+  app.post('/api/cleanup', requireAuth, async (req: any, res) => {
+    try {
+      await cleanupService.performCleanup();
+      res.json({ success: true, message: "Cleanup completed" });
+    } catch (error) {
+      console.error("Error during manual cleanup:", error);
+      res.status(500).json({ message: "Failed to perform cleanup" });
     }
   });
 
@@ -216,8 +273,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Serve uploaded files
-  app.use('/uploads', express.static('uploads'));
+  // Serve uploaded files with cache headers
+  app.use('/uploads', (req, res, next) => {
+    // Set cache headers for media files (7 days)
+    res.set({
+      'Cache-Control': 'public, max-age=604800, immutable', // 7 days
+      'Expires': new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toUTCString(),
+    });
+    next();
+  }, express.static('uploads'));
 
   /**
    * Search users by username (partial match, case-insensitive)

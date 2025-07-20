@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { cleanupService } from "./cleanup";
 
 const app = express();
 app.use(express.json());
@@ -64,7 +65,15 @@ app.use((req, res, next) => {
   server.listen({
     port,
     host: "127.0.0.1",
-  }, () => {
+  }, async () => {
     log(`serving on port ${port}`);
+    
+    // Start the file cleanup service
+    try {
+      await cleanupService.startCleanupService();
+      log("File cleanup service started successfully");
+    } catch (error) {
+      log(`Failed to start file cleanup service: ${error}`);
+    }
   });
 })();
