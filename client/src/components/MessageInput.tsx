@@ -26,10 +26,15 @@ export default function MessageInput({ chatId, onTyping }: MessageInputProps) {
       return response.json();
     },
     onSuccess: (newMessage) => {
-      // Optimistically update the message list
+      // Optimistically update the message list, ensuring no duplicates
       queryClient.setQueryData(
         ["/api/chats", chatId, "messages"],
-        (oldMessages: any[] = []) => [...oldMessages, newMessage]
+        (oldMessages: any[] = []) => {
+          if (oldMessages.some(msg => msg.id === newMessage.id)) {
+            return oldMessages; // Message already exists, do nothing
+          }
+          return [...oldMessages, newMessage];
+        }
       );
       
       // Update the lastMessage in the main chats list

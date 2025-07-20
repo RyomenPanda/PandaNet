@@ -31,17 +31,17 @@ export default function Chat() {
   const handleWebSocketMessage = useCallback((message: WebSocketMessage) => {
     switch (message.type) {
       case 'new_message':
-        // Ignore messages sent by the current user, as they are handled optimistically
-        if (message.data.senderId === user?.id) {
-          return;
-        }
-
         const { chatId: newMessageChatId, ...newMessageData } = message.data;
 
-        // Update the message list for the specific chat
+        // Update the message list for the specific chat, ensuring no duplicates
         queryClient.setQueryData(
           ["/api/chats", newMessageChatId, "messages"],
-          (oldMessages: any[] = []) => [...oldMessages, newMessageData]
+          (oldMessages: any[] = []) => {
+            if (oldMessages.some(msg => msg.id === newMessageData.id)) {
+              return oldMessages; // Message already exists, do nothing
+            }
+            return [...oldMessages, newMessageData];
+          }
         );
         
         // Update the lastMessage in the main chats list
