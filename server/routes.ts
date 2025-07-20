@@ -5,6 +5,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import multer from "multer";
 import path from "path";
 import { storage } from "./storage";
+import { db } from "./db";
 import { setupAuth, requireAuth } from "./auth";
 import { insertChatSchema, insertMessageSchema, insertChatMemberSchema } from "@shared/schema";
 import { z } from "zod";
@@ -38,6 +39,120 @@ interface WebSocketClient extends WebSocket {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Create HTTP server
+  const httpServer = createServer(app);
+  
+  // WebSocket setup - MUST be before API routes that use broadcastToChat
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  const clients = new Map<string, WebSocketClient[]>();
+  const onlineUsers = new Set<number>();
+
+  function broadcastToChat(chatId: number, message: any) {
+    const chatClients = clients.get(`chat_${chatId}`) || [];
+    chatClients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(message));
+      }
+    });
+  }
+
+  wss.on('connection', (ws: WebSocketClient, req) => {
+    console.log('WebSocket client connected');
+
+    ws.on('message', async (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        
+        switch (message.type) {
+          case 'join_chat':
+            const { chatId, userId } = message.data;
+            ws.userId = userId;
+            ws.chatId = chatId;
+            
+            // Mark user as online
+            onlineUsers.add(userId);
+            
+            // Add client to chat room
+            const chatKey = `chat_${chatId}`;
+            if (!clients.has(chatKey)) {
+              clients.set(chatKey, []);
+            }
+            clients.get(chatKey)!.push(ws);
+            
+            // Notify others that user joined
+            broadcastToChat(chatId, {
+              type: 'user_joined',
+              data: { userId },
+            });
+            
+            // Broadcast online status to all connected clients
+            wss.clients.forEach((client) => {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({
+                  type: 'user_online',
+                  data: { userId }
+                }));
+              }
+            });
+            break;
+
+          case 'typing':
+            if (ws.chatId) {
+              broadcastToChat(ws.chatId, {
+                type: 'typing',
+                data: { userId: ws.userId, typing: message.data.typing },
+              });
+            }
+            break;
+        }
+      } catch (error) {
+        console.error('WebSocket message error:', error);
+      }
+    });
+
+    ws.on('close', () => {
+      // Remove client from all chat rooms
+      if (ws.chatId) {
+        const chatKey = `chat_${ws.chatId}`;
+        const chatClients = clients.get(chatKey) || [];
+        const index = chatClients.indexOf(ws);
+        if (index > -1) {
+          chatClients.splice(index, 1);
+          if (chatClients.length === 0) {
+            clients.delete(chatKey);
+          }
+        }
+        
+        // Notify others that user left
+        broadcastToChat(ws.chatId, {
+          type: 'user_left',
+          data: { userId: ws.userId },
+        });
+      }
+      
+      // Mark user as offline if no other connections exist
+      if (ws.userId) {
+        const userStillOnline = Array.from(wss.clients).some(client => 
+          (client as WebSocketClient).userId === ws.userId && client.readyState === WebSocket.OPEN
+        );
+        
+        if (!userStillOnline) {
+          onlineUsers.delete(ws.userId);
+          
+          // Broadcast offline status to all connected clients
+          wss.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify({
+                type: 'user_offline',
+                data: { userId: ws.userId }
+              }));
+            }
+          });
+        }
+      }
+    });
+  });
+
   // Auth middleware
   setupAuth(app);
 
@@ -70,8 +185,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.id;
       const chats = await storage.getUserChats(userId);
-      
-
       
       res.json(chats);
     } catch (error) {
@@ -243,18 +356,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Manual cleanup endpoint (for testing)
-  app.post('/api/cleanup', requireAuth, async (req: any, res) => {
+  // File upload endpoint
+  app.post('/api/upload', requireAuth, upload.single('file'), async (req: any, res) => {
     try {
-      await cleanupService.performCleanup();
-      res.json({ success: true, message: "Cleanup completed" });
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      const userId = req.user.id;
+      const file = req.file;
+
+      // Check user storage limit
+      const canUpload = await storage.checkUserStorageLimit(userId, file.size);
+      if (!canUpload) {
+        // Delete the uploaded file
+        await fs.unlink(file.path);
+        return res.status(413).json({ 
+          message: "Storage limit exceeded. You have reached your 1GB storage limit." 
+        });
+      }
+
+      // Move file to user-specific directory
+      const userDir = path.join(process.cwd(), 'uploads', userId.toString());
+      await fs.mkdir(userDir, { recursive: true });
+      
+      const fileName = `${Date.now()}-${file.originalname}`;
+      const newPath = path.join(userDir, fileName);
+      await fs.rename(file.path, newPath);
+
+      // Return file info
+      res.json({
+        url: `/uploads/${userId}/${fileName}`,
+        name: file.originalname,
+        size: file.size,
+        type: file.mimetype,
+      });
     } catch (error) {
-      console.error("Error during manual cleanup:", error);
-      res.status(500).json({ message: "Failed to perform cleanup" });
+      console.error("Error uploading file:", error);
+      res.status(500).json({ message: "Failed to upload file" });
     }
   });
 
-  // User storage usage endpoint
+  // Serve uploaded files
+  app.use('/uploads', express.static(path.join(process.cwd(), 'uploads'), {
+    maxAge: '7d', // Cache for 7 days
+    immutable: true,
+  }));
+
+  // User search endpoint
+  app.get('/api/users/search', requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const { username } = req.query;
+      
+      if (!username || typeof username !== 'string') {
+        return res.status(400).json({ message: "Username parameter is required" });
+      }
+
+      const users = await storage.searchUsersByUsername(username, userId);
+      res.json(users);
+    } catch (error) {
+      console.error("Error searching users:", error);
+      res.status(500).json({ message: "Failed to search users" });
+    }
+  });
+
+  // Storage usage endpoint
   app.get('/api/user/storage', requireAuth, async (req: any, res) => {
     try {
       const userId = req.user.id;
@@ -266,192 +433,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // File upload route
-  app.post('/api/upload', requireAuth, upload.single('file'), async (req: any, res) => {
+  // Manual cleanup endpoint (for testing)
+  app.post('/api/cleanup', requireAuth, async (req: any, res) => {
     try {
-      if (!req.file) {
-        return res.status(400).json({ message: "No file uploaded" });
-      }
-
-      const userId = req.user.id;
-      
-      // Check storage limit before allowing upload
-      const canUpload = await storage.checkUserStorageLimit(userId, req.file.size);
-      if (!canUpload) {
-        // Delete the uploaded file since it exceeds the limit
-        await fs.unlink(req.file.path);
-        return res.status(413).json({ 
-          message: "Storage limit exceeded. You have reached your 1GB storage limit." 
-        });
-      }
-
-      const fileUrl = `/uploads/${req.file.filename}`;
-      res.json({
-        url: fileUrl,
-        name: req.file.originalname,
-        size: req.file.size,
-        type: req.file.mimetype,
-      });
+      await cleanupService.performCleanup();
+      res.json({ message: "Cleanup completed" });
     } catch (error) {
-      console.error("Error uploading file:", error);
-      res.status(500).json({ message: "Failed to upload file" });
+      console.error("Error during cleanup:", error);
+      res.status(500).json({ message: "Failed to perform cleanup" });
     }
   });
 
-  // Serve uploaded files with cache headers
-  app.use('/uploads', (req, res, next) => {
-    // Set cache headers for media files (7 days)
-    res.set({
-      'Cache-Control': 'public, max-age=604800, immutable', // 7 days
-      'Expires': new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toUTCString(),
-    });
-    next();
-  }, express.static('uploads'));
-
-  /**
-   * Search users by username (partial match, case-insensitive)
-   * GET /api/users/search?username=someuser
-   * Returns: [{ id, username, displayName, firstName, lastName, profileImageUrl }]
-   */
-  app.get('/api/users/search', requireAuth, async (req: any, res) => {
-    try {
-      const { username } = req.query;
-      const userId = req.user.id;
-      if (!username || typeof username !== 'string' || username.trim() === '') {
-        return res.status(400).json({ message: 'Username query required' });
-      }
-      // Search users by username (case-insensitive, partial match), exclude self
-      const users = await storage.searchUsersByUsername(username, userId);
-      res.json(users.map(u => ({
-        id: u.id,
-        username: u.username,
-        displayName: u.displayName,
-        firstName: u.firstName,
-        lastName: u.lastName,
-        profileImageUrl: u.profileImageUrl,
-      })));
-    } catch (error) {
-      console.error('User search error:', error);
-      res.status(500).json({ message: 'Failed to search users' });
-    }
-  });
-
-  const httpServer = createServer(app);
-
-  // WebSocket setup
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
-  const clients = new Map<string, WebSocketClient[]>();
-
-  function broadcastToChat(chatId: number, message: any) {
-    const chatClients = clients.get(`chat_${chatId}`) || [];
-    chatClients.forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(message));
-      }
-    });
-  }
-
-  // Track online users
-  const onlineUsers = new Set<number>();
-
-  wss.on('connection', (ws: WebSocketClient, req) => {
-    console.log('WebSocket client connected');
-
-    ws.on('message', async (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        
-        switch (message.type) {
-          case 'join_chat':
-            const { chatId, userId } = message.data;
-            ws.userId = userId;
-            ws.chatId = chatId;
-            
-            // Mark user as online
-            onlineUsers.add(userId);
-            
-            // Add client to chat room
-            const chatKey = `chat_${chatId}`;
-            if (!clients.has(chatKey)) {
-              clients.set(chatKey, []);
-            }
-            clients.get(chatKey)!.push(ws);
-            
-            // Notify others that user joined
-            broadcastToChat(chatId, {
-              type: 'user_joined',
-              data: { userId },
-            });
-            
-            // Broadcast online status to all connected clients
-            wss.clients.forEach((client) => {
-              if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({
-                  type: 'user_online',
-                  data: { userId }
-                }));
-              }
-            });
-            break;
-
-          case 'typing':
-            if (ws.chatId) {
-              broadcastToChat(ws.chatId, {
-                type: 'typing',
-                data: { userId: ws.userId, typing: message.data.typing },
-              });
-            }
-            break;
-        }
-      } catch (error) {
-        console.error('WebSocket message error:', error);
-      }
-    });
-
-    ws.on('close', () => {
-      // Remove client from all chat rooms
-      if (ws.chatId) {
-        const chatKey = `chat_${ws.chatId}`;
-        const chatClients = clients.get(chatKey) || [];
-        const index = chatClients.indexOf(ws);
-        if (index > -1) {
-          chatClients.splice(index, 1);
-          if (chatClients.length === 0) {
-            clients.delete(chatKey);
-          }
-        }
-        
-        // Notify others that user left
-        broadcastToChat(ws.chatId, {
-          type: 'user_left',
-          data: { userId: ws.userId },
-        });
-      }
-      
-      // Mark user as offline if no other connections exist
-      if (ws.userId) {
-        const userStillOnline = Array.from(wss.clients).some(client => 
-          (client as WebSocketClient).userId === ws.userId && client.readyState === WebSocket.OPEN
-        );
-        
-        if (!userStillOnline) {
-          onlineUsers.delete(ws.userId);
-          
-          // Broadcast offline status to all connected clients
-          wss.clients.forEach((client) => {
-            if (client.readyState === WebSocket.OPEN) {
-              client.send(JSON.stringify({
-                type: 'user_offline',
-                data: { userId: ws.userId }
-              }));
-            }
-          });
-        }
-      }
-    });
-  });
-
-  // Read receipts endpoints - placed after WebSocket setup
+  // Read receipts endpoints
   app.patch("/api/messages/:messageId/status", requireAuth, async (req: any, res) => {
     try {
       const { messageId } = req.params;
