@@ -25,20 +25,9 @@ export default function MessageInput({ chatId, onTyping }: MessageInputProps) {
       const response = await apiRequest("POST", `/api/chats/${chatId}/messages`, messageData);
       return response.json();
     },
-    onSuccess: (newMessage) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/chats", chatId, "messages"] });
-      
-      // Update the lastMessage in the chats query cache
-      queryClient.setQueryData(
-        ["/api/chats"],
-        (oldChats: any[] = []) => 
-          oldChats.map(chat => 
-            chat.id === chatId 
-              ? { ...chat, lastMessage: newMessage }
-              : chat
-          )
-      );
-      
+    onSuccess: () => {
+      // The message list is now updated via WebSocket, so no manual invalidation is needed here.
+      // We only need to clear the input field.
       setMessage("");
     },
     onError: (error) => {
@@ -91,7 +80,8 @@ export default function MessageInput({ chatId, onTyping }: MessageInputProps) {
         mediaSize: fileData.size,
       });
       
-      // Invalidate storage query to update usage
+      // We don't need to invalidate the messages query here anymore.
+      // The storage query invalidation is still useful for real-time usage updates.
       queryClient.invalidateQueries({ queryKey: ["/api/user/storage"] });
     },
     onError: (error) => {

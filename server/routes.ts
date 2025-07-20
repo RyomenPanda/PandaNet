@@ -271,7 +271,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.id;
       const chatId = parseInt(req.params.chatId);
       
-      // Check if user is member of the chat
       const isMember = await storage.isUserInChat(chatId, userId);
       if (!isMember) {
         return res.status(403).json({ message: "Not authorized to send messages to this chat" });
@@ -285,18 +284,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const message = await storage.createMessage(messageData);
       
-      // Broadcast message to WebSocket clients
-      const messageWithSender = {
-        ...message,
-        sender: await storage.getUser(userId),
-      };
-      
-      broadcastToChat(chatId, {
-        type: 'new_message',
-        data: messageWithSender,
-      });
+      // Respond immediately to the sender
+      res.status(201).json(message);
 
-      res.json(messageWithSender);
+      // Asynchronously prepare and broadcast the message
+      (async () => {
+        try {
+          const sender = await storage.getUser(userId);
+          if (sender) {
+            const messageWithSender = { ...message, sender };
+            broadcastToChat(chatId, {
+              type: 'new_message',
+              data: messageWithSender,
+            });
+          }
+        } catch (e) {
+          console.error("Failed to broadcast message:", e);
+        }
+      })();
+
     } catch (error) {
       console.error("Error sending message:", error);
       res.status(500).json({ message: "Failed to send message" });
