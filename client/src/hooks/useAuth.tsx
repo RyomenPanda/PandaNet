@@ -1,4 +1,4 @@
-import { createContext, ReactNode, useContext } from "react";
+import { createContext, ReactNode, useContext, useMemo } from "react";
 import { useQuery, useMutation, UseMutationResult } from "@tanstack/react-query";
 import { User, RegisterData, LoginData } from "@shared/schema";
 import { getQueryFn, apiRequest, queryClient } from "../lib/queryClient";
@@ -18,7 +18,7 @@ export const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { toast } = useToast();
   
-  const { data: user, error, isLoading } = useQuery<User | undefined, Error>({
+  const userQuery = useQuery<User | undefined, Error>({
     queryKey: ["/api/user"],
     queryFn: getQueryFn({ on401: "returnNull" }),
     staleTime: 0, // Always refetch user data on mount
@@ -75,18 +75,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
   });
 
-  return (
-    <AuthContext.Provider value={{
-      user: user ?? null,
-      isLoading,
-      error,
-      loginMutation,
-      logoutMutation,
-      registerMutation,
-    }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  const memoizedUser = useMemo(() => {
+    if (userQuery.data) {
+      return userQuery.data;
+    }
+    return null;
+  }, [userQuery.data]);
+
+  const value = useMemo(() => ({
+    user: memoizedUser,
+    isLoading: userQuery.isLoading,
+    error: userQuery.error,
+    loginMutation,
+    logoutMutation,
+    registerMutation,
+  }), [memoizedUser, userQuery.isLoading, userQuery.error, loginMutation, logoutMutation, registerMutation]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
